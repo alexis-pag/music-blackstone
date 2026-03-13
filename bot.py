@@ -27,6 +27,25 @@ import discord
 from discord.ext import commands
 import yt_dlp
 from dotenv import load_dotenv
+from flask import Flask
+from threading import Thread
+
+# --- Mini serveur HTTP pour Render ---
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Bot en ligne !"
+
+def run_flask():
+    # Render utilise souvent le port 8080 ou 10000
+    port = int(os.getenv("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+def start_flask():
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
 
 # Charger les variables d'environnement depuis le fichier .env
 load_dotenv()
@@ -629,6 +648,9 @@ if __name__ == "__main__":
         log.warn("⚠️  Token non configuré !")
         log.warn("   Définissez DISCORD_TOKEN ou modifiez la variable TOKEN ligne ~30.")
         sys.exit(1)
+
+    # Démarrer le serveur HTTP pour Render
+    start_flask()
 
     try:
         bot.run(TOKEN, log_handler=None)
