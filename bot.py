@@ -56,7 +56,7 @@ YTDL_OPTIONS = {
 }
 
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
-FFMPEG_PATH = r"C:\Users\alexi\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin\ffmpeg.exe"
+FFMPEG_PATH = "ffmpeg"
 FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
     "options":        "-vn",  # Pas de vidéo
