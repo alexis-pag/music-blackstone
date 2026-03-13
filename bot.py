@@ -31,21 +31,30 @@ from flask import Flask
 from threading import Thread
 
 # --- Mini serveur HTTP pour Render ---
-app = Flask("")
+app = Flask("keep_alive")
+server_thread = None
 
 @app.route("/")
 def home():
-    return "Bot en ligne !"
+    return "Bot actif !"
 
-def run_flask():
-    # Render utilise souvent le port 8080 ou 10000
+def run_server():
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-def start_flask():
-    t = Thread(target=run_flask)
-    t.daemon = True
-    t.start()
+def start_keep_alive():
+    global server_thread
+    if server_thread is None or not server_thread.is_alive():
+        log.info("🌐 Démarrage du serveur HTTP de maintien en vie...")
+        server_thread = Thread(target=run_server)
+        server_thread.daemon = True
+        server_thread.start()
+
+def stop_keep_alive():
+    global server_thread
+    if server_thread and server_thread.is_alive():
+        log.info("🌐 Arrêt du maintien en vie demandé (le thread continuera de tourner sur Render).")
+        server_thread = None
 
 # Charger les variables d'environnement depuis le fichier .env
 load_dotenv()
@@ -322,6 +331,19 @@ async def on_ready():
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.listening, name="!play <url>")
     )
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    """Gère le maintien en vie du bot selon l'activité vocale."""
+    if member.bot: return
+
+    # Si quelqu'un rejoint un salon vocal
+    if after.channel:
+        start_keep_alive()
+    # Si quelqu'un quitte et qu'il n'y a plus personne (simplifié)
+    elif before.channel and not after.channel:
+        # On pourrait vérifier si d'autres salons sont occupés ici
+        pass
 
 
 # ── !join [channel_name] ──────────────────────────────────────────────────────
@@ -650,7 +672,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Démarrer le serveur HTTP pour Render
-    start_flask()
+    start_keep_alive()
 
     try:
         bot.run(TOKEN, log_handler=None)
