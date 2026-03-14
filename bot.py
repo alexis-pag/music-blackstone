@@ -56,11 +56,11 @@ YTDL_OPTIONS = {
     "cachedir":          False,
     "extractor_args": {
         "youtube": {
-            "player_client": ["android", "ios", "web"],
+            "player_client": ["android", "ios"], # On privilégie les clients mobiles souvent moins bloqués avec cookies
             "player_skip": ["webpage", "configs"],
         }
     },
-    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "user_agent": "com.google.android.youtube/19.29.37 (Linux; U; Android 14; en_US; Pixel 8 Pro; Build/AP2A.240705.004) gzip",
     "youtube_include_dash_manifest": False,
     "youtube_include_hls_manifest": False,
     "source_address": "0.0.0.0", # Forcer l'IPv4
@@ -209,9 +209,11 @@ async def extract_info(url: str) -> dict:
     
     if cookies_path and os.path.exists(cookies_path):
         opts["cookiefile"] = cookies_path
-        log.info(f"🍪 Cookies chargés depuis : {cookies_path}")
+        # Vérifier la taille pour débugger
+        size = os.path.getsize(cookies_path)
+        log.info(f"🍪 Cookies détectés : {cookies_path} ({size} octets)")
     else:
-        log.warn("⚠️ Aucun fichier cookies trouvé. L'extraction YouTube pourrait échouer.")
+        log.warn("⚠️ Aucun fichier cookies trouvé. YouTube risque de bloquer l'extraction.")
 
     loop = asyncio.get_event_loop()
     
