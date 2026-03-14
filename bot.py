@@ -240,7 +240,8 @@ async def extract_info(url: str) -> dict:
         # yt-dlp tente parfois d'écrire dedans, ce qui cause une erreur [Errno 30].
         # Solution : copier le fichier dans le dossier temporaire qui est accessible en écriture.
         try:
-            tmp_cookies = os.path.join(tempfile.gettempdir(), "cookies.txt")
+            # On utilise un nom unique pour éviter les conflits
+            tmp_cookies = os.path.join(tempfile.gettempdir(), f"cookies_{os.getpid()}.txt")
             shutil.copy2(cookies_path, tmp_cookies)
             opts["cookiefile"] = tmp_cookies
             size = os.path.getsize(tmp_cookies)
@@ -362,6 +363,7 @@ async def _after_track(queue: GuildQueue, error, text_channel: discord.TextChann
 
     # Vérifier si on est toujours connecté avant de tenter la suite
     if queue.voice and queue.voice.is_connected():
+        await asyncio.sleep(3) # On attend 3s pour éviter le spam de connexion/lecture
         await play_next(queue)
     else:
         # On vérifie si la queue est encore là (si on_voice_state_update ne l'a pas déjà géré)
@@ -401,6 +403,7 @@ async def add_to_queue(ctx: commands.Context, url: str):
         # Si on vient de se connecter et que l'extraction échoue, on repart
         if newly_connected and queue.voice:
             log.info(f"🚪 Déconnexion car l'extraction a échoué juste après connexion sur [{ctx.guild.id}].")
+            await asyncio.sleep(3) # On attend avant de se déco pour stabiliser
             await queue.voice.disconnect()
             delete_queue(ctx.guild.id)
         return await ctx.reply(f"❌ Impossible de récupérer la musique : {e}")
