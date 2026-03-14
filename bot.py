@@ -24,37 +24,12 @@ import os
 import sys
 import datetime
 import discord
+import aiohttp
 from discord.ext import commands
 import yt_dlp
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
-
-# --- Mini serveur HTTP pour Render ---
-app = Flask("keep_alive")
-server_thread = None
-
-@app.route("/")
-def home():
-    return "Bot actif !"
-
-def run_server():
-    port = int(os.getenv("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
-def start_keep_alive():
-    global server_thread
-    if server_thread is None or not server_thread.is_alive():
-        log.info("🌐 Démarrage du serveur HTTP de maintien en vie...")
-        server_thread = Thread(target=run_server)
-        server_thread.daemon = True
-        server_thread.start()
-
-def stop_keep_alive():
-    global server_thread
-    if server_thread and server_thread.is_alive():
-        log.info("🌐 Arrêt du maintien en vie demandé (le thread continuera de tourner sur Render).")
-        server_thread = None
 
 # Charger les variables d'environnement depuis le fichier .env
 load_dotenv()
@@ -154,6 +129,39 @@ class GuildQueue:
 
 # Stockage global des files : guild_id → GuildQueue
 _queues: dict[int, GuildQueue] = {}
+
+def is_any_playing() -> bool:
+    """Vérifie si au moins un serveur joue de la musique."""
+    return any(q.voice and q.voice.is_playing() for q in _queues.values())
+
+# --- Mini serveur HTTP pour Render ---
+app = Flask("keep_alive")
+server_thread = None
+
+@app.route("/")
+def home():
+    if is_any_playing():
+        return "Bot is alive! (Music playing)"
+    return "Bot is idle. (No music)"
+
+def run_server():
+    # Render utilise souvent le port 10000 par défaut
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+def start_keep_alive():
+    global server_thread
+    if server_thread is None or not server_thread.is_alive():
+        log.info("🌐 Démarrage du serveur HTTP de maintien en vie...")
+        server_thread = Thread(target=run_server)
+        server_thread.daemon = True
+        server_thread.start()
+
+def stop_keep_alive():
+    global server_thread
+    if server_thread and server_thread.is_alive():
+        log.info("🌐 Arrêt du maintien en vie demandé (le thread continuera de tourner sur Render).")
+        server_thread = None
 
 # Stockage global pour la commande revers : member_id → Task
 _revers_tasks: dict[int, asyncio.Task] = {}
@@ -324,26 +332,49 @@ def can_use_music():
     return commands.check(predicate)
 
 
+async def self_ping():
+    """Tâche de fond pour pinguer le serveur lui-même et éviter la veille sur Render Free."""
+    url = os.getenv("RENDER_EXTERNAL_URL")
+    if not url:
+        log.info("🌐 RENDER_EXTERNAL_URL non configuré, saut du self-ping.")
+        return
+
+    log.info(f"🌐 Activation du self-ping pour {url}")
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        log.info(f"🌐 Self-ping réussi ({response.status})")
+                    else:
+                        log.warn(f"🌐 Self-ping échec ({response.status})")
+            except Exception as e:
+                log.error(f"🌐 Erreur lors du self-ping : {e}")
+            
+            # Attendre 10 minutes (600 secondes) avant le prochain ping
+            await asyncio.sleep(600)
+
+
 @bot.event
 async def on_ready():
     log.info(f"✅ Connecté en tant que {bot.user} (ID: {bot.user.id})")
     log.info(f"📡 {len(bot.guilds)} serveur(s)")
+    
+    # Démarrer la tâche de self-ping
+    bot.loop.create_task(self_ping())
+
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.listening, name="!play <url>")
     )
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    """Gère le maintien en vie du bot selon l'activité vocale."""
+    """Gère le nettoyage si le bot se retrouve seul dans un salon."""
     if member.bot: return
 
-    # Si quelqu'un rejoint un salon vocal
-    if after.channel:
-        start_keep_alive()
-    # Si quelqu'un quitte et qu'il n'y a plus personne (simplifié)
-    elif before.channel and not after.channel:
-        # On pourrait vérifier si d'autres salons sont occupés ici
-        pass
+    # Optionnel : déconnexion automatique si tout le monde quitte
+    # Mais on garde simple ici.
+    pass
 
 
 # ── !join [channel_name] ──────────────────────────────────────────────────────
