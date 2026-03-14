@@ -302,13 +302,27 @@ async def add_to_queue(ctx: commands.Context, url: str):
 
     # ── Rejoindre le salon vocal si pas déjà connecté ─────────────────────
     if not queue.voice or not queue.voice.is_connected():
-        voice_channel = ctx.author.voice.channel
-        queue.voice        = await voice_channel.connect()
-        queue.text_channel = ctx.channel
-        log.info(f"Connecté → {voice_channel.name} ({ctx.guild.name})")
+        try:
+            log.info(f"🎤 Tentative de connexion au salon vocal...")
+            voice_channel = ctx.author.voice.channel
+            # Augmenter le timeout à 120s pour Render
+            queue.voice = await voice_channel.connect(timeout=120.0, reconnect=True)
+            queue.text_channel = ctx.channel
+            log.info(f"✅ Connecté → {voice_channel.name}")
+        except asyncio.TimeoutError:
+            log.error("❌ Timeout lors de la connexion au salon vocal.")
+            return await ctx.reply("❌ Délai d'attente dépassé pour rejoindre le salon vocal. Réessayez.")
+        except Exception as e:
+            log.error(f"❌ Erreur connexion vocale : {e}")
+            return await ctx.reply(f"❌ Impossible de rejoindre le salon : {e}")
 
     # ── Extraire les métadonnées ───────────────────────────────────────────
-    data  = await extract_info(url)
+    try:
+        log.info(f"🔎 Extraction des infos YouTube : {url}")
+        data  = await extract_info(url)
+    except Exception as e:
+        log.error(f"❌ Erreur extraction YouTube : {e}")
+        return await ctx.reply(f"❌ Impossible de récupérer la musique : {e}")
     track = Track(
         url           = data.get("url") or data.get("webpage_url", url),
         title         = data.get("title", "Titre inconnu"),
