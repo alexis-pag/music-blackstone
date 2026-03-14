@@ -413,12 +413,7 @@ async def add_to_queue(ctx: commands.Context, url: str):
         data  = await extract_info(url)
     except Exception as e:
         log.error(f"❌ Erreur extraction sur [{ctx.guild.id}] : {e}")
-        # Si on vient de se connecter et que l'extraction échoue, on repart
-        if newly_connected and queue.voice:
-            log.info(f"🚪 Déconnexion car l'extraction a échoué juste après connexion sur [{ctx.guild.id}].")
-            await asyncio.sleep(3) # On attend avant de se déco pour stabiliser
-            await queue.voice.disconnect()
-            delete_queue(ctx.guild.id)
+        # On ne se déconnecte plus automatiquement si l'extraction échoue
         return await ctx.reply(f"❌ Impossible de récupérer la musique : {e}")
 
     track = Track(
