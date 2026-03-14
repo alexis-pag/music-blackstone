@@ -44,7 +44,7 @@ if sys.platform == "win32":
 TOKEN  = os.getenv("DISCORD_TOKEN")
 PREFIX = "!"
 
-# Options yt-dlp : imitation d'un client mobile pour contourner le blocage
+# Options yt-dlp : configuration maximale pour le bypass
 YTDL_OPTIONS = {
     "format":            "bestaudio/best",
     "noplaylist":        True,
@@ -52,12 +52,15 @@ YTDL_OPTIONS = {
     "no_warnings":       True,
     "default_search":    "auto",
     "nocheckcertificate": True,
-    "ignoreerrors":      False,  # On veut voir les erreurs précises
+    "ignoreerrors":      False,
+    "logtostderr":       False,
     "extractor_args": {
         "youtube": {
-            "player_client": ["ios", "web"],
+            "player_client": ["ios", "android", "web"],
+            "skip": ["dash", "hls"],
         }
     },
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 }
 
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
@@ -300,6 +303,10 @@ async def _after_track(queue: GuildQueue, error, text_channel: discord.TextChann
 async def add_to_queue(ctx: commands.Context, url: str):
     """Extrait les infos, ajoute à la file et démarre si besoin."""
 
+    # Nettoyage de l'URL si c'est une vidéo avec playlist/radio
+    if "youtube.com/watch?v=" in url:
+        url = url.split("&list=")[0].split("&")[0]
+
     queue = get_or_create(ctx.guild.id)
 
     # ── Rejoindre le salon vocal si pas déjà connecté ─────────────────────
@@ -307,8 +314,8 @@ async def add_to_queue(ctx: commands.Context, url: str):
         try:
             log.info(f"🎤 Tentative de connexion au salon vocal...")
             voice_channel = ctx.author.voice.channel
-            # Augmenter le timeout à 120s pour Render
-            queue.voice = await voice_channel.connect(timeout=120.0, reconnect=True)
+            # Utiliser self_deaf=True pour plus de stabilité sur Render
+            queue.voice = await voice_channel.connect(timeout=120.0, reconnect=True, self_deaf=True)
             queue.text_channel = ctx.channel
             log.info(f"✅ Connecté → {voice_channel.name}")
         except asyncio.TimeoutError:
