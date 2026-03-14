@@ -247,7 +247,8 @@ async def play_next(queue: GuildQueue):
 
     try:
         log.info(f'▶ "{track.title}" [{queue.guild_id}]')
-
+        log.info(f"🔗 URL stream : {track.url[:50]}...") # Log l'URL pour debug
+        
         # Créer la source audio FFmpeg depuis l'URL du stream
         source = discord.FFmpegPCMAudio(track.url, executable=FFMPEG_PATH, **FFMPEG_OPTIONS)
         # PCMVolumeTransformer permet de contrôler le volume
