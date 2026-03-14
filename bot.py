@@ -386,25 +386,34 @@ async def add_to_queue(ctx: commands.Context, url: str):
 
     # ── Rejoindre le salon vocal ─────────────────────
     async with queue.connecting_lock:
+        # Si on a déjà un client vocal, on vérifie s'il est vraiment mort ou juste en cours de reco
+        if queue.voice:
+            if queue.voice.is_connected():
+                pass # Déjà connecté, tout va bien
+            else:
+                log.info(f"⏳ Le bot est déjà en cours de connexion/reconnexion sur [{ctx.guild.id}]")
+                # On attend un peu que la connexion se stabilise au lieu de forcer
+                for _ in range(10):
+                    if queue.voice.is_connected(): break
+                    await asyncio.sleep(1)
+        
+        # Si après l'attente on n'est toujours pas connecté, on tente une nouvelle connexion
         if not queue.voice or not queue.voice.is_connected():
             try:
-                # On nettoie toute ancienne connexion foireuse
-                if queue.voice:
-                    try: 
-                        log.info(f"🧹 Nettoyage d'une ancienne connexion inactive sur [{ctx.guild.id}]")
-                        await queue.voice.disconnect(force=True)
-                    except: pass
-                    queue.voice = None
-
                 log.info(f"🎤 Tentative de connexion au salon vocal de {ctx.guild.name}...")
                 voice_channel = ctx.author.voice.channel
-                # Augmenter le timeout pour donner plus de chances au handshake sur Render
-                queue.voice = await voice_channel.connect(timeout=120.0, reconnect=True, self_deaf=True)
+                # On ne fait PLUS de disconnect(force=True) ici car ça peut causer la 4017
+                queue.voice = await voice_channel.connect(timeout=60.0, reconnect=True, self_deaf=True)
                 queue.text_channel = ctx.channel
                 newly_connected = True
                 log.info(f"✅ [VOICE JOIN] Connecté à {voice_channel.name} sur {ctx.guild.name}")
             except Exception as e:
                 log.error(f"❌ Erreur critique connexion vocale sur {ctx.guild.id} : {e}")
+                # En cas d'erreur vraiment bloquante, on nettoie
+                if queue.voice:
+                    try: await queue.voice.disconnect(force=True)
+                    except: pass
+                    queue.voice = None
                 return await ctx.reply(f"❌ Impossible de rejoindre le salon (Erreur: {e}).")
 
     # ── Extraire les métadonnées ───────────────────────────────────────────
