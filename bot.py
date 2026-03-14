@@ -23,6 +23,7 @@ import asyncio
 import os
 import sys
 import datetime
+import logging
 import discord
 import aiohttp
 from discord.ext import commands
@@ -94,6 +95,26 @@ class Logger:
     def error(cls, *a): cls._log("ERROR", *a)
 
 log = Logger()
+
+# --- CONFIGURATION LOGGING DISCORD ---
+# On configure logging pour capturer les erreurs internes de discord.py et yt-dlp
+# sans polluer la console avec les infos inutiles.
+logging.basicConfig(level=logging.WARN)
+_dlog = logging.getLogger("discord")
+_dlog.setLevel(logging.INFO) # On veut les infos de connexion/déconnexion de Discord
+_ylog = logging.getLogger("yt_dlp")
+_ylog.setLevel(logging.ERROR)
+
+# On redirige les logs discord.py vers notre propre logger
+class DiscordLogHandler(logging.Handler):
+    def emit(self, record):
+        msg = self.format(record)
+        if record.levelno >= logging.ERROR: log.error(f"[Discord] {msg}")
+        elif record.levelno >= logging.WARNING: log.warn(f"[Discord] {msg}")
+        else: log.info(f"[Discord] {msg}")
+
+_dlog.addHandler(DiscordLogHandler())
+_dlog.propagate = False
 
 # ─── FILE D'ATTENTE PAR SERVEUR ───────────────────────────────────────────────
 
@@ -200,18 +221,11 @@ async def extract_info(url: str) -> dict:
     # Gérer les cookies (notamment pour Render Secret Files)
     cookies_path = os.getenv("COOKIES_PATH")
     
-    # Détection automatique sur Render si COOKIES_PATH n'est pas défini
+    # Si COOKIES_PATH n'est pas défini, on cherche uniquement dans l'emplacement standard des secrets sur Render
     if not cookies_path:
-        # On cherche à la racine ET dans /etc/secrets/
-        search_paths = [
-            os.path.join(os.getcwd(), "cookies.txt"),
-            "/etc/secrets/cookies.txt",
-            "cookies.txt"
-        ]
-        for p in search_paths:
-            if os.path.exists(p):
-                cookies_path = p
-                break
+        p = "/etc/secrets/cookies.txt"
+        if os.path.exists(p):
+            cookies_path = p
     
     if cookies_path and os.path.exists(cookies_path):
         opts["cookiefile"] = cookies_path
@@ -314,6 +328,8 @@ async def play_next(queue: GuildQueue):
             await track.text_channel.send(
                 f"❌ Impossible de lire **{track.title}** : {e}"
             )
+        # On attend un peu avant de tenter la suivante pour éviter les boucles d'erreurs rapides
+        await asyncio.sleep(2)
         await play_next(queue)
 
 
@@ -435,8 +451,12 @@ async def on_ready():
     log.info(f"✅ Connecté en tant que {bot.user} (ID: {bot.user.id})")
     log.info(f"📡 {len(bot.guilds)} serveur(s)")
     
-    # Démarrer la tâche de self-ping
-    bot.loop.create_task(self_ping())
+    # Démarrer la tâche de self-ping une SEULE fois
+    if not getattr(bot, "_self_ping_started", False):
+        bot._self_ping_started = True
+        bot.loop.create_task(self_ping())
+    else:
+        log.info("🌐 Self-ping déjà actif après reconnexion.")
 
     # Vérifier si l'encodeur Opus est chargé
     if not discord.opus.is_loaded():
@@ -475,8 +495,14 @@ async def on_voice_state_update(member, before, after):
     # ─── Cas du BOT lui-même ───
     if member.id == bot.user.id:
         if before.channel and not after.channel:
-            log.info(f"🔌 Le bot a été déconnecté de {before.channel.name} ({member.guild.id})")
-            delete_queue(member.guild.id)
+            queue = get_queue(member.guild.id)
+            if queue:
+                log.info(f"🔌 Le bot a été déconnecté de {before.channel.name} ({member.guild.id})")
+                # Si le bot a encore une connexion vocale enregistrée, on la nuke proprement
+                if queue.voice:
+                    try: await queue.voice.disconnect(force=True)
+                    except: pass
+                delete_queue(member.guild.id)
         return
 
     # ─── Cas où des HUMAINS quittent le salon ───
@@ -484,11 +510,16 @@ async def on_voice_state_update(member, before, after):
         queue = get_queue(before.channel.guild.id)
         # On vérifie si le bot est présent dans ce salon précis
         if queue and queue.voice and queue.voice.channel and queue.voice.channel.id == before.channel.id:
-            # Compter les humains (non bots) restants dans le salon
+            # On attend un tout petit peu (1.5s) car Discord envoie parfois plusieurs events
+            # et les membres ne sont pas tout de suite mis à jour dans l'objet channel.
+            await asyncio.sleep(1.5)
+            
+            # Re-compter les humains (non bots) restants dans le salon
             humans = [m for m in before.channel.members if not m.bot]
             if len(humans) == 0:
                 log.info(f"🚪 Salon vide (plus d'humains) sur [{queue.guild_id}], déconnexion.")
-                await queue.voice.disconnect()
+                if queue.voice:
+                    await queue.voice.disconnect()
                 delete_queue(queue.guild_id)
 
 
