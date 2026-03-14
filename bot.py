@@ -626,9 +626,18 @@ async def deco(ctx: commands.Context, arg: str = None):
 
 
 # ── !join [channel_name] ──────────────────────────────────────────────────────
-@bot.command(name="join", help="Rejoint votre salon vocal ou un salon spécifié")
+@bot.command(name="join", help="Rejoint votre salon vocal ou un salon spécifié (!join fin pour déconnecter)")
 @can_use_music()
 async def join(ctx: commands.Context, *, channel_name: str = None):
+    # Cas spécial : !join fin
+    if channel_name and channel_name.lower() == "fin":
+        queue = get_queue(ctx.guild.id)
+        if queue and queue.voice:
+            await queue.voice.disconnect()
+            delete_queue(ctx.guild.id)
+            return await ctx.reply("👋 Déconnecté du salon vocal.")
+        return await ctx.reply("❌ Je ne suis pas connecté à un salon vocal.")
+
     target_channel = None
 
     if channel_name:
