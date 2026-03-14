@@ -61,7 +61,7 @@ YTDL_OPTIONS = {
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
 FFMPEG_PATH = "ffmpeg"
 FFMPEG_OPTIONS = {
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -probesize 32 -analyzeduration 0",
     "options":        "-vn",  # Pas de vidéo
 }
 
@@ -362,6 +362,25 @@ async def on_ready():
     
     # Démarrer la tâche de self-ping
     bot.loop.create_task(self_ping())
+
+    # Vérifier si l'encodeur Opus est chargé
+    if not discord.opus.is_loaded():
+        log.warn("🔊 Opus n'est pas chargé nativement, tentative de chargement...")
+        try:
+            discord.opus.load_opus() # Cela peut échouer selon l'OS
+        except Exception as e:
+            log.error(f"❌ Impossible de charger Opus manuellement : {e}")
+
+    # Vérification de FFmpeg
+    try:
+        import subprocess
+        res = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+        if res.returncode == 0:
+            log.info("🎞️ FFmpeg détecté avec succès !")
+        else:
+            log.error(f"❌ FFmpeg détecté mais erreur : {res.stderr[:100]}")
+    except FileNotFoundError:
+        log.error("❌ FFmpeg n'est PAS installé sur ce serveur ! La lecture échouera.")
 
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.listening, name="!play <url>")
