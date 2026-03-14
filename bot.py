@@ -44,15 +44,20 @@ if sys.platform == "win32":
 TOKEN  = os.getenv("DISCORD_TOKEN")
 PREFIX = "!"
 
-# Options yt-dlp : plus de compatibilité pour éviter "Requested format not available"
+# Options yt-dlp : imitation d'un client mobile pour contourner le blocage
 YTDL_OPTIONS = {
-    "format":            "best",  # On laisse yt-dlp choisir le meilleur flux fonctionnel
+    "format":            "bestaudio/best",
     "noplaylist":        True,
     "quiet":             True,
     "no_warnings":       True,
     "default_search":    "auto",
     "nocheckcertificate": True,
-    "ignoreerrors":      True,
+    "ignoreerrors":      False,  # On veut voir les erreurs précises
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["ios", "web"],
+        }
+    },
 }
 
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
@@ -200,9 +205,14 @@ async def extract_info(url: str) -> dict:
         lambda: ytdl.extract_info(url, download=False)
     )
 
+    if not data:
+        raise Exception("YouTube n'a renvoyé aucune information. Vérifiez l'URL ou les cookies.")
+
     # Si c'est une playlist, prendre la première entrée
     if "entries" in data:
         data = data["entries"][0]
+        if not data:
+            raise Exception("Playlist vide ou inaccessible.")
 
     return data
 
