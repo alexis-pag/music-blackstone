@@ -47,21 +47,12 @@ PREFIX = "!"
 # Options yt-dlp : extraction audio uniquement, meilleure qualité
 YTDL_OPTIONS = {
     "format":            "bestaudio/best",
-    "noplaylist":        True,       # Ne pas télécharger des playlists entières
-    "quiet":             True,       # Pas de logs yt-dlp dans le terminal
+    "noplaylist":        True,
+    "quiet":             True,
     "no_warnings":       True,
     "default_search":    "auto",
-    "source_address":    "0.0.0.0",  # Forcer IPv4
-    "postprocessors": [{
-        "key":            "FFmpegExtractAudio",
-        "preferredcodec": "opus",
-    }],
-    # Contournement du blocage YouTube (Bot Detection)
-    "extractor_args": {
-        "youtube": {
-            "player_client": ["android", "web"],
-        }
-    },
+    "source_address":    "0.0.0.0",
+    "nocheckcertificate": True,
 }
 
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
