@@ -56,6 +56,12 @@ YTDL_OPTIONS = {
         "key":            "FFmpegExtractAudio",
         "preferredcodec": "opus",
     }],
+    # Contournement du blocage YouTube (Bot Detection)
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "web"],
+        }
+    },
 }
 
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
