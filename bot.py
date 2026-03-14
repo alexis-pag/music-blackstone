@@ -81,7 +81,8 @@ class Logger:
     def _log(cls, level: str, *args):
         ts    = datetime.datetime.now().strftime("%H:%M:%S")
         color = cls.COLORS.get(level, "")
-        print(f"{color}[{ts}] [{level}]{cls.RESET}", *args)
+        # On ajoute flush=True pour que Render affiche les logs immédiatement
+        print(f"{color}[{ts}] [{level}]{cls.RESET}", *args, flush=True)
 
     @classmethod
     def info(cls, *a):  cls._log("INFO",  *a)
@@ -461,6 +462,7 @@ async def join(ctx: commands.Context, *, channel_name: str = None):
 @bot.command(name="play", help="Joue de la musique depuis une URL YouTube")
 @can_use_music()
 async def play(ctx: commands.Context, *, url: str = None):
+    log.info(f"▶ Commande !play reçue pour : {url}")
     if not url:
         return await ctx.reply("❌ Usage : `!play <url_youtube>`")
 
