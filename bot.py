@@ -318,7 +318,12 @@ async def _after_track(queue: GuildQueue, error, text_channel: discord.TextChann
     if error:
         log.error(f"Erreur après lecture [{queue.guild_id}] : {error}")
 
-    await play_next(queue)
+    # Vérifier si on est toujours connecté avant de tenter la suite
+    if queue.voice and queue.voice.is_connected():
+        await play_next(queue)
+    else:
+        log.warn(f"⚠️ Bot déconnecté prématurément sur [{queue.guild_id}], arrêt de la file.")
+        delete_queue(queue.guild_id)
 
 
 async def add_to_queue(ctx: commands.Context, url: str):
@@ -333,7 +338,7 @@ async def add_to_queue(ctx: commands.Context, url: str):
     # ── Rejoindre le salon vocal ─────────────────────
     if not queue.voice or not queue.voice.is_connected():
         try:
-            log.info(f"🎤 Connexion au salon vocal...")
+            log.info(f"🎤 Connexion demandée au salon vocal...")
             voice_channel = ctx.author.voice.channel
             queue.voice = await voice_channel.connect(timeout=60.0, reconnect=True, self_deaf=True)
             queue.text_channel = ctx.channel
@@ -348,10 +353,10 @@ async def add_to_queue(ctx: commands.Context, url: str):
         log.info(f"🔎 Extraction YouTube : {url}")
         data  = await extract_info(url)
     except Exception as e:
-        log.error(f"❌ Erreur extraction : {e}")
+        log.error(f"❌ Erreur extraction sur [{ctx.guild.id}] : {e}")
         # Si on vient de se connecter et que l'extraction échoue, on repart
         if newly_connected and queue.voice:
-            log.info("🚪 Déconnexion car l'extraction a échoué juste après connexion.")
+            log.info(f"🚪 Déconnexion car l'extraction a échoué juste après connexion sur [{ctx.guild.id}].")
             await queue.voice.disconnect()
             delete_queue(ctx.guild.id)
         return await ctx.reply(f"❌ Impossible de récupérer la musique : {e}")
@@ -458,17 +463,24 @@ async def on_ready():
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    """Gère le nettoyage si le bot se retrouve seul dans un salon."""
+    """Gère le nettoyage si le bot se retrouve seul dans un salon ou est déconnecté."""
+    
+    # ─── Cas du BOT lui-même ───
     if member.id == bot.user.id:
+        if before.channel and not after.channel:
+            log.info(f"🔌 Le bot a été déconnecté de {before.channel.name} ({member.guild.id})")
+            delete_queue(member.guild.id)
         return
 
-    # Si quelqu'un quitte un salon
+    # ─── Cas où des HUMAINS quittent le salon ───
     if before.channel is not None:
         queue = get_queue(before.channel.guild.id)
-        if queue and queue.voice and queue.voice.channel.id == before.channel.id:
-            # S'il ne reste que des bots
-            if len([m for m in before.channel.members if not m.bot]) == 0:
-                log.info(f"🚪 Salon vide sur [{queue.guild_id}], déconnexion.")
+        # On vérifie si le bot est présent dans ce salon précis
+        if queue and queue.voice and queue.voice.channel and queue.voice.channel.id == before.channel.id:
+            # Compter les humains (non bots) restants dans le salon
+            humans = [m for m in before.channel.members if not m.bot]
+            if len(humans) == 0:
+                log.info(f"🚪 Salon vide (plus d'humains) sur [{queue.guild_id}], déconnexion.")
                 await queue.voice.disconnect()
                 delete_queue(queue.guild_id)
 
