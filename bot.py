@@ -152,6 +152,9 @@ class GuildQueue:
     def clear(self):
         self.tracks.clear()
         self.current = None
+        if self.timeout_task:
+            self.timeout_task.cancel()
+            self.timeout_task = None
 
     @property
     def is_empty(self) -> bool:
@@ -281,17 +284,17 @@ async def play_next(queue: GuildQueue):
 
     track = queue.next()
     if not track:
-        # File vide → message + déconnexion différée
+        # File vide → message + déconnexion différée (40 secondes d'inactivité)
         if queue.text_channel:
-            await queue.text_channel.send("✅ File terminée. Déconnexion automatique dans 1 minute...")
+            await queue.text_channel.send("✅ File terminée. Déconnexion automatique dans 40 secondes d'inactivité...")
         
         log.info(f"⌛ File vide pour [{queue.guild_id}].")
         
         async def _timeout():
-            await asyncio.sleep(60)
+            await asyncio.sleep(40)
             q = get_queue(queue.guild_id)
             if q and q.is_empty and q.voice and not q.voice.is_playing() and not q.is_paused:
-                log.info(f"🚪 Déconnexion automatique de [{queue.guild_id}]")
+                log.info(f"🚪 Déconnexion automatique (40s inactif) de [{queue.guild_id}]")
                 await q.voice.disconnect()
                 delete_queue(queue.guild_id)
         
@@ -345,8 +348,10 @@ async def _after_track(queue: GuildQueue, error, text_channel: discord.TextChann
     if queue.voice and queue.voice.is_connected():
         await play_next(queue)
     else:
-        log.warn(f"⚠️ Bot déconnecté prématurément sur [{queue.guild_id}], arrêt de la file.")
-        delete_queue(queue.guild_id)
+        # On vérifie si la queue est encore là (si on_voice_state_update ne l'a pas déjà géré)
+        if queue.guild_id in _queues:
+            log.warn(f"⚠️ Bot déconnecté prématurément sur [{queue.guild_id}], arrêt de la file.")
+            delete_queue(queue.guild_id)
 
 
 async def add_to_queue(ctx: commands.Context, url: str):
@@ -495,14 +500,14 @@ async def on_voice_state_update(member, before, after):
     # ─── Cas du BOT lui-même ───
     if member.id == bot.user.id:
         if before.channel and not after.channel:
-            queue = get_queue(member.guild.id)
+            # On retire de _queues immédiatement pour éviter les race conditions (plusieurs events)
+            queue = _queues.pop(member.guild.id, None)
             if queue:
                 log.info(f"🔌 Le bot a été déconnecté de {before.channel.name} ({member.guild.id})")
-                # Si le bot a encore une connexion vocale enregistrée, on la nuke proprement
                 if queue.voice:
                     try: await queue.voice.disconnect(force=True)
                     except: pass
-                delete_queue(member.guild.id)
+                queue.clear()
         return
 
     # ─── Cas où des HUMAINS quittent le salon ───
@@ -517,10 +522,14 @@ async def on_voice_state_update(member, before, after):
             # Re-compter les humains (non bots) restants dans le salon
             humans = [m for m in before.channel.members if not m.bot]
             if len(humans) == 0:
-                log.info(f"🚪 Salon vide (plus d'humains) sur [{queue.guild_id}], déconnexion.")
-                if queue.voice:
-                    await queue.voice.disconnect()
-                delete_queue(queue.guild_id)
+                # On vérifie si la queue existe encore avant de l'effacer (évite logs multiples)
+                queue = _queues.pop(before.channel.guild.id, None)
+                if queue:
+                    log.info(f"🚪 Salon vide (plus d'humains) sur [{queue.guild_id}], déconnexion.")
+                    if queue.voice:
+                        try: await queue.voice.disconnect()
+                        except: pass
+                    queue.clear()
 
 
 # ── !join [channel_name] ──────────────────────────────────────────────────────
@@ -550,6 +559,17 @@ async def join(ctx: commands.Context, *, channel_name: str = None):
     else:
         queue.voice = await target_channel.connect()
         queue.text_channel = ctx.channel
+        
+        # Démarrer un timeout d'inactivité de 40s dès la connexion
+        async def _idle_timeout():
+            await asyncio.sleep(40)
+            q = get_queue(ctx.guild.id)
+            if q and q.is_empty and q.voice and not q.voice.is_playing() and not q.is_paused:
+                log.info(f"🚪 Déconnexion pour inactivité après join ({ctx.guild.id})")
+                await q.voice.disconnect()
+                delete_queue(ctx.guild.id)
+        
+        queue.timeout_task = asyncio.create_task(_idle_timeout())
 
     await ctx.reply(f"✅ Connecté à **{target_channel.name}**")
 
