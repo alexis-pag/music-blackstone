@@ -202,18 +202,23 @@ async def extract_info(url: str) -> dict:
     
     # Détection automatique sur Render si COOKIES_PATH n'est pas défini
     if not cookies_path:
-        for p in ["cookies.txt", "/etc/secrets/cookies.txt"]:
+        # On cherche à la racine ET dans /etc/secrets/
+        search_paths = [
+            os.path.join(os.getcwd(), "cookies.txt"),
+            "/etc/secrets/cookies.txt",
+            "cookies.txt"
+        ]
+        for p in search_paths:
             if os.path.exists(p):
                 cookies_path = p
                 break
     
     if cookies_path and os.path.exists(cookies_path):
         opts["cookiefile"] = cookies_path
-        # Vérifier la taille pour débugger
         size = os.path.getsize(cookies_path)
         log.info(f"🍪 Cookies détectés : {cookies_path} ({size} octets)")
     else:
-        log.warn("⚠️ Aucun fichier cookies trouvé. YouTube risque de bloquer l'extraction.")
+        log.warn("⚠️ Aucun fichier cookies trouvé. Vérifiez votre Secret File sur Render.")
 
     loop = asyncio.get_event_loop()
     
