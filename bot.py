@@ -190,7 +190,16 @@ def delete_queue(guild_id: int):
 
 async def extract_info(url: str) -> dict:
     """Extrait les métadonnées et l'URL du stream via yt-dlp (thread pool)."""
-    ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
+    
+    # Options dynamiques : ajouter le fichier cookies s'il existe
+    options = YTDL_OPTIONS.copy()
+    if os.path.exists("cookies.txt"):
+        log.info("🍪 Utilisation de cookies.txt pour YouTube.")
+        options["cookiefile"] = "cookies.txt"
+    else:
+        log.warn("🍪 cookies.txt non trouvé, extraction sans cookies (risque de blocage).")
+
+    ytdl = yt_dlp.YoutubeDL(options)
 
     loop = asyncio.get_event_loop()
     # yt-dlp est synchrone → exécuter dans un thread séparé
@@ -727,8 +736,18 @@ if __name__ == "__main__":
         log.warn("   Définissez DISCORD_TOKEN ou modifiez la variable TOKEN ligne ~30.")
         sys.exit(1)
 
-    # Démarrer le serveur HTTP pour Render
-    start_keep_alive()
+    # Préparer les cookies YouTube si présents dans l'environnement
+    cookies_env = os.getenv("YOUTUBE_COOKIES")
+    if cookies_env:
+        log.info("🍪 Création du fichier cookies.txt depuis la variable d'environnement.")
+        with open("cookies.txt", "w", encoding="utf-8") as f:
+            f.write(cookies_env)
+
+    # Démarrer le serveur HTTP uniquement sur Render
+    if os.getenv("RENDER"):
+        start_keep_alive()
+    else:
+        log.info("🏠 Lancement local (pas de serveur HTTP de maintien).")
 
     try:
         bot.run(TOKEN, log_handler=None)
