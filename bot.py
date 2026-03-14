@@ -398,7 +398,7 @@ async def add_to_queue(ctx: commands.Context, url: str):
                 queue.voice = await voice_channel.connect(timeout=90.0, reconnect=True, self_deaf=False)
                 queue.text_channel = ctx.channel
                 newly_connected = True
-                log.info(f"✅ Connecté → {voice_channel.name}")
+                log.info(f"✅ [VOICE JOIN] Connecté à {voice_channel.name} sur {ctx.guild.name} ({ctx.guild.id})")
             except Exception as e:
                 log.error(f"❌ Erreur connexion vocale : {e}")
                 return await ctx.reply(f"❌ Impossible de rejoindre le salon : {e}")
@@ -546,7 +546,7 @@ async def on_voice_state_update(member: discord.Member, before, after):
                 # On retire de _queues immédiatement
                 queue = _queues.pop(member.guild.id, None)
                 if queue:
-                    log.info(f"🔌 Le bot a été déconnecté de {before.channel.name} ({member.guild.id})")
+                    log.info(f"🔌 [VOICE LEAVE] Le bot a été déconnecté de {before.channel.name} sur {member.guild.name} ({member.guild.id})")
                     if queue.voice:
                         try: await queue.voice.disconnect(force=True)
                         except: pass
@@ -568,7 +568,7 @@ async def on_voice_state_update(member: discord.Member, before, after):
                 # On vérifie si la queue existe encore avant de l'effacer (évite logs multiples)
                 queue = _queues.pop(before.channel.guild.id, None)
                 if queue:
-                    log.info(f"🚪 Salon vide (plus d'humains) sur [{queue.guild_id}], déconnexion.")
+                    log.info(f"🚪 [VOICE LEAVE] Salon vide (plus d'humains) sur {before.channel.guild.name} ({queue.guild_id}), déconnexion.")
                     if queue.voice:
                         try: await queue.voice.disconnect()
                         except: pass
