@@ -57,13 +57,7 @@ YTDL_OPTIONS = {
     "nocheckcertificate": True,
     "ignoreerrors":      False,
     "cachedir":          False,
-    "extractor_args": {
-        "youtube": {
-            "player_client": ["android", "ios"], # On privilégie les clients mobiles souvent moins bloqués avec cookies
-            "player_skip": ["webpage", "configs"],
-        }
-    },
-    "user_agent": "com.google.android.youtube/19.29.37 (Linux; U; Android 14; en_US; Pixel 8 Pro; Build/AP2A.240705.004) gzip",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "youtube_include_dash_manifest": False,
     "youtube_include_hls_manifest": False,
     "source_address": "0.0.0.0", # Forcer l'IPv4
@@ -72,7 +66,7 @@ YTDL_OPTIONS = {
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
 FFMPEG_PATH = "ffmpeg"
 FFMPEG_OPTIONS = {
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -probesize 32 -analyzeduration 0",
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
     "options":        "-vn",
 }
 
@@ -388,20 +382,22 @@ async def add_to_queue(ctx: commands.Context, url: str):
             try:
                 # On nettoie toute ancienne connexion foireuse
                 if queue.voice:
-                    try: await queue.voice.disconnect(force=True)
+                    try: 
+                        log.info(f"🧹 Nettoyage d'une ancienne connexion inactive sur [{ctx.guild.id}]")
+                        await queue.voice.disconnect(force=True)
                     except: pass
                     queue.voice = None
 
-                log.info(f"🎤 Connexion demandée au salon vocal...")
+                log.info(f"🎤 Tentative de connexion au salon vocal de {ctx.guild.name}...")
                 voice_channel = ctx.author.voice.channel
-                # On désactive self_deaf car il peut parfois poser problème sur Render avec l'erreur 4017
-                queue.voice = await voice_channel.connect(timeout=90.0, reconnect=True, self_deaf=False)
+                # Augmenter le timeout pour donner plus de chances au handshake sur Render
+                queue.voice = await voice_channel.connect(timeout=120.0, reconnect=True, self_deaf=True)
                 queue.text_channel = ctx.channel
                 newly_connected = True
-                log.info(f"✅ [VOICE JOIN] Connecté à {voice_channel.name} sur {ctx.guild.name} ({ctx.guild.id})")
+                log.info(f"✅ [VOICE JOIN] Connecté à {voice_channel.name} sur {ctx.guild.name}")
             except Exception as e:
-                log.error(f"❌ Erreur connexion vocale : {e}")
-                return await ctx.reply(f"❌ Impossible de rejoindre le salon : {e}")
+                log.error(f"❌ Erreur critique connexion vocale sur {ctx.guild.id} : {e}")
+                return await ctx.reply(f"❌ Impossible de rejoindre le salon (Erreur: {e}).")
 
     # ── Extraire les métadonnées ───────────────────────────────────────────
     try:
@@ -484,6 +480,18 @@ async def on_ready():
     log.info(f"✅ Connecté en tant que {bot.user} (ID: {bot.user.id})")
     log.info(f"📡 {len(bot.guilds)} serveur(s)")
     
+    # Vérifier si opus est chargé
+    if not discord.opus.is_loaded():
+        try:
+            discord.opus.load_opus("libopus.so.0") # Essayer de charger sur Linux (Render)
+            log.info("✅ Bibliothèque Opus chargée.")
+        except:
+            try:
+                discord.opus.load_opus("opus")
+                log.info("✅ Bibliothèque Opus chargée.")
+            except:
+                log.warn("⚠️ Impossible de charger Opus via load_opus. discord.py tentera de la trouver tout seul.")
+
     # Démarrer la tâche de self-ping une SEULE fois
     if not getattr(bot, "_self_ping_started", False):
         bot._self_ping_started = True
@@ -537,20 +545,35 @@ async def on_voice_state_update(member: discord.Member, before, after):
     # ─── Cas du BOT lui-même ───
     if member.id == bot.user.id:
         if before.channel and not after.channel:
-            # On attend un peu pour voir si c'est une déco réelle ou un changement/reco auto
-            await asyncio.sleep(2)
+            # On attend un peu pour voir si c'est une déco réelle ou un changement/reco auto (move)
+            # discord.py va tenter de reconnecter pendant ce temps.
+            await asyncio.sleep(8) # On attend plus longtemps (8s) pour laisser le retry interne agir
             
-            # On revérifie si le bot est vraiment déconnecté (pas de voice_client actif)
+            # On revérifie si le bot est vraiment déconnecté (plus de salon vocal du tout)
+            if member.voice and member.voice.channel:
+                log.info(f"🔄 Reconnexion ou changement de salon détecté pour le bot, on garde la file.")
+                return
+
             vc = member.guild.voice_client
-            if vc is None or not vc.is_connected():
-                # On retire de _queues immédiatement
-                queue = _queues.pop(member.guild.id, None)
-                if queue:
-                    log.info(f"🔌 [VOICE LEAVE] Le bot a été déconnecté de {before.channel.name} sur {member.guild.name} ({member.guild.id})")
-                    if queue.voice:
-                        try: await queue.voice.disconnect(force=True)
-                        except: pass
-                    queue.clear()
+            # Si le voice_client existe encore, c'est que discord.py est peut-être encore en train d'essayer
+            if vc:
+                if vc.is_connected():
+                    log.info(f"✅ Bot reconnecté avec succès, on garde la file.")
+                    return
+                # Si non connecté, on attend encore un peu car il peut être en retry (4017)
+                log.info(f"⏳ Bot non connecté mais voice_client présent ({member.guild.name}), attente prolongée...")
+                await asyncio.sleep(10)
+                if vc.is_connected() or (member.voice and member.voice.channel):
+                    return
+
+            # Si vraiment plus rien après tout ce temps, alors c'est une déco propre ou kick
+            queue = _queues.pop(member.guild.id, None)
+            if queue:
+                log.info(f"🔌 [VOICE LEAVE] Le bot est définitivement déconnecté de {before.channel.name} sur {member.guild.name}")
+                if queue.voice:
+                    try: await queue.voice.disconnect(force=True)
+                    except: pass
+                queue.clear()
         return
 
     # ─── Cas où des HUMAINS quittent le salon ───
@@ -631,7 +654,7 @@ async def join(ctx: commands.Context, *, channel_name: str = None):
     if queue.voice and queue.voice.is_connected():
         await queue.voice.move_to(target_channel)
     else:
-        queue.voice = await target_channel.connect()
+        queue.voice = await target_channel.connect(timeout=60.0, reconnect=True, self_deaf=True)
         queue.text_channel = ctx.channel
         
         # Démarrer un timeout d'inactivité de 40s dès la connexion
