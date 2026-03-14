@@ -58,9 +58,11 @@ YTDL_OPTIONS = {
     "ignoreerrors":      False,
     "cachedir":          False,
     "extractor_args": {
+        "youtubetab": {"skip": ["webpage"]},
         "youtube": {
             "player_client": ["android", "ios", "web_creator"],
-            "player_skip": ["configs"],
+            "player_skip": ["webpage", "configs"],
+            "visitor_data": os.getenv("YOUTUBE_VISITOR_DATA", ""), # Optionnel pour bypass plus poussé
         }
     },
     "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
