@@ -56,16 +56,21 @@ YTDL_OPTIONS = {
     "cachedir":          False,
     "extractor_args": {
         "youtube": {
-            "player_client": ["ios"], # iOS est souvent le plus stable pour le bypass
+            "player_client": ["android", "ios", "web"],
+            "player_skip": ["webpage", "configs"],
         }
-    }
+    },
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "youtube_include_dash_manifest": False,
+    "youtube_include_hls_manifest": False,
+    "source_address": "0.0.0.0", # Forcer l'IPv4
 }
 
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
 FFMPEG_PATH = "ffmpeg"
 FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -probesize 32 -analyzeduration 0",
-    "options":        "-vn",  # Pas de vidéo
+    "options":        "-vn",
 }
 
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
@@ -79,7 +84,7 @@ class Logger:
         ts    = datetime.datetime.now().strftime("%H:%M:%S")
         color = cls.COLORS.get(level, "")
         # On ajoute flush=True pour que Render affiche les logs immédiatement
-        print(f"{color}[{ts}] [{level}]{cls.RESET}", *args, flush=True)
+        print(f"[{ts}] [{level}]", *args, flush=True)
 
     @classmethod
     def info(cls, *a):  cls._log("INFO",  *a)
@@ -115,6 +120,7 @@ class GuildQueue:
         self.voice:   discord.VoiceClient | None = None  # Connexion vocale
         self.is_paused = False
         self.text_channel: discord.TextChannel | None = None
+        self.timeout_task: asyncio.Task | None = None
 
     def add(self, track: Track):
         self.tracks.append(track)
@@ -164,7 +170,7 @@ def start_keep_alive():
 def stop_keep_alive():
     global server_thread
     if server_thread and server_thread.is_alive():
-        log.info("🌐 Arrêt du maintien en vie demandé (le thread continuera de tourner sur Render).")
+        log.info("🌐 Arrêt du maintien en vie demandé.")
         server_thread = None
 
 # Stockage global pour la commande revers : member_id → Task
@@ -189,33 +195,49 @@ def delete_queue(guild_id: int):
 async def extract_info(url: str) -> dict:
     """Extrait les métadonnées et l'URL du stream via yt-dlp (thread pool)."""
     
-    # Options dynamiques : ajouter le fichier cookies s'il existe
-    options = YTDL_OPTIONS.copy()
-    if os.path.exists("cookies.txt"):
-        log.info("🍪 Utilisation de cookies.txt pour YouTube.")
-        options["cookiefile"] = "cookies.txt"
+    opts = YTDL_OPTIONS.copy()
+    
+    # Gérer les cookies (notamment pour Render Secret Files)
+    cookies_path = os.getenv("COOKIES_PATH")
+    
+    # Détection automatique sur Render si COOKIES_PATH n'est pas défini
+    if not cookies_path:
+        for p in ["cookies.txt", "/etc/secrets/cookies.txt"]:
+            if os.path.exists(p):
+                cookies_path = p
+                break
+    
+    if cookies_path and os.path.exists(cookies_path):
+        opts["cookiefile"] = cookies_path
+        log.info(f"🍪 Cookies chargés depuis : {cookies_path}")
     else:
-        log.warn("🍪 cookies.txt non trouvé, extraction sans cookies (risque de blocage).")
-
-    ytdl = yt_dlp.YoutubeDL(options)
+        log.warn("⚠️ Aucun fichier cookies trouvé. L'extraction YouTube pourrait échouer.")
 
     loop = asyncio.get_event_loop()
-    # yt-dlp est synchrone → exécuter dans un thread séparé
-    data = await loop.run_in_executor(
-        None,
-        lambda: ytdl.extract_info(url, download=False)
-    )
+    
+    # Nettoyage de l'URL pour éviter les problèmes de playlist
+    if "youtube.com/watch" in url:
+        url = url.split("&list=")[0].split("&")[0]
 
-    if not data:
-        raise Exception("YouTube n'a renvoyé aucune information. Vérifiez l'URL ou les cookies.")
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            data = await loop.run_in_executor(
+                None,
+                lambda: ydl.extract_info(url, download=False)
+            )
 
-    # Si c'est une playlist, prendre la première entrée
-    if "entries" in data:
-        data = data["entries"][0]
-        if not data:
-            raise Exception("Playlist vide ou inaccessible.")
+            if not data:
+                raise Exception("YouTube n'a renvoyé aucune information.")
 
-    return data
+            if "entries" in data:
+                data = data["entries"][0]
+                if not data:
+                    raise Exception("Playlist vide ou inaccessible.")
+
+            return data
+    except Exception as e:
+        log.error(f"Erreur yt-dlp : {str(e)}")
+        raise e
 
 
 def format_duration(seconds: int | None) -> str:
@@ -230,41 +252,45 @@ def format_duration(seconds: int | None) -> str:
 
 async def play_next(queue: GuildQueue):
     """Lit la prochaine piste de la file. Appelé automatiquement après chaque piste."""
+    
+    # Annuler tout timeout de déconnexion existant
+    if queue.timeout_task:
+        queue.timeout_task.cancel()
+        queue.timeout_task = None
 
     track = queue.next()
     if not track:
         # File vide → message + déconnexion différée
-        # On utilise le dernier canal connu de la file ou un canal par défaut
         if queue.text_channel:
-            await queue.text_channel.send(
-                "✅ File terminée. Déconnexion dans 30 secondes..."
-            )
-        await asyncio.sleep(30)
-        q = get_queue(queue.guild_id)
-        if q and q.is_empty and q.voice:
-            await q.voice.disconnect()
-            delete_queue(queue.guild_id)
+            await queue.text_channel.send("✅ File terminée. Déconnexion automatique dans 1 minute...")
+        
+        log.info(f"⌛ File vide pour [{queue.guild_id}].")
+        
+        async def _timeout():
+            await asyncio.sleep(60)
+            q = get_queue(queue.guild_id)
+            if q and q.is_empty and q.voice and not q.voice.is_playing() and not q.is_paused:
+                log.info(f"🚪 Déconnexion automatique de [{queue.guild_id}]")
+                await q.voice.disconnect()
+                delete_queue(queue.guild_id)
+        
+        queue.timeout_task = asyncio.create_task(_timeout())
         return
 
     queue.current = track
 
     try:
         log.info(f'▶ "{track.title}" [{queue.guild_id}]')
-        log.info(f"🔗 URL stream : {track.url[:50]}...") # Log l'URL pour debug
         
-        # Créer la source audio FFmpeg depuis l'URL du stream
         source = discord.FFmpegPCMAudio(track.url, executable=FFMPEG_PATH, **FFMPEG_OPTIONS)
-        # PCMVolumeTransformer permet de contrôler le volume
         source = discord.PCMVolumeTransformer(source, volume=0.5)
 
         def after_play(error):
-            """Callback appelé par discord.py à la fin de la piste."""
             if error:
                 log.error(f"Erreur lecture : {error}")
-            # Planifier la piste suivante dans la boucle asyncio
             asyncio.run_coroutine_threadsafe(
                 _after_track(queue, error, track.text_channel),
-                queue.voice.loop
+                bot.loop
             )
 
         queue.voice.play(source, after=after_play)
@@ -281,7 +307,6 @@ async def play_next(queue: GuildQueue):
             await track.text_channel.send(
                 f"❌ Impossible de lire **{track.title}** : {e}"
             )
-        # Passer à la suivante automatiquement
         await play_next(queue)
 
 
@@ -292,8 +317,6 @@ async def _after_track(queue: GuildQueue, error, text_channel: discord.TextChann
 
     if error:
         log.error(f"Erreur après lecture [{queue.guild_id}] : {error}")
-        if text_channel:
-            await text_channel.send(f"❌ Erreur de lecture : {error}")
 
     await play_next(queue)
 
@@ -301,35 +324,38 @@ async def _after_track(queue: GuildQueue, error, text_channel: discord.TextChann
 async def add_to_queue(ctx: commands.Context, url: str):
     """Extrait les infos, ajoute à la file et démarre si besoin."""
 
-    # Nettoyage de l'URL si c'est une vidéo avec playlist/radio
     if "youtube.com/watch?v=" in url:
         url = url.split("&list=")[0].split("&")[0]
 
     queue = get_or_create(ctx.guild.id)
+    newly_connected = False
 
-    # ── Rejoindre le salon vocal si pas déjà connecté ─────────────────────
+    # ── Rejoindre le salon vocal ─────────────────────
     if not queue.voice or not queue.voice.is_connected():
         try:
-            log.info(f"🎤 Tentative de connexion au salon vocal...")
+            log.info(f"🎤 Connexion au salon vocal...")
             voice_channel = ctx.author.voice.channel
-            # Utiliser self_deaf=True pour plus de stabilité sur Render
-            queue.voice = await voice_channel.connect(timeout=120.0, reconnect=True, self_deaf=True)
+            queue.voice = await voice_channel.connect(timeout=60.0, reconnect=True, self_deaf=True)
             queue.text_channel = ctx.channel
+            newly_connected = True
             log.info(f"✅ Connecté → {voice_channel.name}")
-        except asyncio.TimeoutError:
-            log.error("❌ Timeout lors de la connexion au salon vocal.")
-            return await ctx.reply("❌ Délai d'attente dépassé pour rejoindre le salon vocal. Réessayez.")
         except Exception as e:
             log.error(f"❌ Erreur connexion vocale : {e}")
             return await ctx.reply(f"❌ Impossible de rejoindre le salon : {e}")
 
     # ── Extraire les métadonnées ───────────────────────────────────────────
     try:
-        log.info(f"🔎 Extraction des infos YouTube : {url}")
+        log.info(f"🔎 Extraction YouTube : {url}")
         data  = await extract_info(url)
     except Exception as e:
-        log.error(f"❌ Erreur extraction YouTube : {e}")
+        log.error(f"❌ Erreur extraction : {e}")
+        # Si on vient de se connecter et que l'extraction échoue, on repart
+        if newly_connected and queue.voice:
+            log.info("🚪 Déconnexion car l'extraction a échoué juste après connexion.")
+            await queue.voice.disconnect()
+            delete_queue(ctx.guild.id)
         return await ctx.reply(f"❌ Impossible de récupérer la musique : {e}")
+
     track = Track(
         url           = data.get("url") or data.get("webpage_url", url),
         title         = data.get("title", "Titre inconnu"),
@@ -340,7 +366,7 @@ async def add_to_queue(ctx: commands.Context, url: str):
 
     queue.add(track)
 
-    # ── Démarrer si rien ne joue, sinon confirmer l'ajout ─────────────────
+    # ── Démarrer si rien ne joue ─────────────────
     if not queue.voice.is_playing() and not queue.voice.is_paused():
         await play_next(queue)
     else:
@@ -433,11 +459,18 @@ async def on_ready():
 @bot.event
 async def on_voice_state_update(member, before, after):
     """Gère le nettoyage si le bot se retrouve seul dans un salon."""
-    if member.bot: return
+    if member.id == bot.user.id:
+        return
 
-    # Optionnel : déconnexion automatique si tout le monde quitte
-    # Mais on garde simple ici.
-    pass
+    # Si quelqu'un quitte un salon
+    if before.channel is not None:
+        queue = get_queue(before.channel.guild.id)
+        if queue and queue.voice and queue.voice.channel.id == before.channel.id:
+            # S'il ne reste que des bots
+            if len([m for m in before.channel.members if not m.bot]) == 0:
+                log.info(f"🚪 Salon vide sur [{queue.guild_id}], déconnexion.")
+                await queue.voice.disconnect()
+                delete_queue(queue.guild_id)
 
 
 # ── !join [channel_name] ──────────────────────────────────────────────────────
