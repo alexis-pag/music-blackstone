@@ -21,6 +21,8 @@
 
 import asyncio
 import os
+import shutil
+import tempfile
 import sys
 import datetime
 import logging
@@ -234,9 +236,20 @@ async def extract_info(url: str) -> dict:
             cookies_path = p
     
     if cookies_path and os.path.exists(cookies_path):
-        opts["cookiefile"] = cookies_path
-        size = os.path.getsize(cookies_path)
-        log.info(f"🍪 Cookies détectés : {cookies_path} ({size} octets)")
+        # Sur Render, /etc/secrets est en lecture seule. 
+        # yt-dlp tente parfois d'écrire dedans, ce qui cause une erreur [Errno 30].
+        # Solution : copier le fichier dans le dossier temporaire qui est accessible en écriture.
+        try:
+            tmp_cookies = os.path.join(tempfile.gettempdir(), "cookies.txt")
+            shutil.copy2(cookies_path, tmp_cookies)
+            opts["cookiefile"] = tmp_cookies
+            size = os.path.getsize(tmp_cookies)
+            log.info(f"🍪 Cookies copiés vers {tmp_cookies} : {size} octets")
+        except Exception as e:
+            log.warn(f"⚠️ Impossible de copier les cookies : {e}. Utilisation directe.")
+            opts["cookiefile"] = cookies_path
+            size = os.path.getsize(cookies_path)
+            log.info(f"🍪 Cookies détectés : {cookies_path} ({size} octets)")
     else:
         log.warn("⚠️ Aucun fichier cookies trouvé. Vérifiez votre Secret File sur Render.")
 
