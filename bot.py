@@ -736,13 +736,6 @@ if __name__ == "__main__":
         log.warn("   Définissez DISCORD_TOKEN ou modifiez la variable TOKEN ligne ~30.")
         sys.exit(1)
 
-    # Préparer les cookies YouTube si présents dans l'environnement
-    cookies_env = os.getenv("YOUTUBE_COOKIES")
-    if cookies_env:
-        log.info("🍪 Création du fichier cookies.txt depuis la variable d'environnement.")
-        with open("cookies.txt", "w", encoding="utf-8") as f:
-            f.write(cookies_env)
-
     # Démarrer le serveur HTTP uniquement sur Render
     if os.getenv("RENDER"):
         start_keep_alive()
