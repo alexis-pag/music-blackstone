@@ -200,6 +200,9 @@ def stop_keep_alive():
 # Stockage global pour la commande revers : member_id → Task
 _revers_tasks: dict[int, asyncio.Task] = {}
 
+# Utilisateurs à déconnecter automatiquement : set[member_id]
+_deco_users: set[int] = set()
+
 
 def get_queue(guild_id: int) -> GuildQueue | None:
     return _queues.get(guild_id)
@@ -494,9 +497,18 @@ async def on_ready():
     )
 
 @bot.event
-async def on_voice_state_update(member, before, after):
+async def on_voice_state_update(member: discord.Member, before, after):
     """Gère le nettoyage si le bot se retrouve seul dans un salon ou est déconnecté."""
     
+    # --- Cas du DECO FORCÉ ---
+    if after.channel is not None and member.id in _deco_users:
+        try:
+            await member.move_to(None)
+            log.info(f"🚫 Déconnexion forcée de {member.name} ({member.id})")
+        except:
+            pass
+        return
+
     # ─── Cas du BOT lui-même ───
     if member.id == bot.user.id:
         if before.channel and not after.channel:
@@ -530,6 +542,37 @@ async def on_voice_state_update(member, before, after):
                         try: await queue.voice.disconnect()
                         except: pass
                     queue.clear()
+
+
+# ── !deco @user ou !deco fin ────────────────────────────────────────────────
+@bot.command(name="deco", help="Force la déconnexion d'un utilisateur ou met fin au système avec 'fin'")
+@commands.has_permissions(administrator=True)
+async def deco(ctx: commands.Context, arg: str = None):
+    if not arg:
+        return await ctx.reply("❌ Usage : `!deco @utilisateur` ou `!deco fin` pour tout arrêter.")
+
+    # Cas 1 : Fin globale
+    if arg.lower() == "fin":
+        count = len(_deco_users)
+        _deco_users.clear()
+        return await ctx.reply(f"✅ Système de déconnexion arrêté. ({count} utilisateurs libérés)")
+
+    # Cas 2 : Spécifier un membre
+    try:
+        member = await commands.MemberConverter().convert(ctx, arg)
+    except commands.MemberNotFound:
+        return await ctx.reply(f"❌ Utilisateur `{arg}` introuvable.")
+
+    if member.id in _deco_users:
+        _deco_users.remove(member.id)
+        await ctx.reply(f"✅ **{member.display_name}** n'est plus forcé à la déconnexion.")
+    else:
+        _deco_users.add(member.id)
+        # Déconnecter immédiatement s'il est déjà en voc
+        if member.voice and member.voice.channel:
+            try: await member.move_to(None)
+            except: pass
+        await ctx.reply(f"🚫 **{member.display_name}** sera désormais déconnecté dès qu'il rejoint une voc.")
 
 
 # ── !join [channel_name] ──────────────────────────────────────────────────────
