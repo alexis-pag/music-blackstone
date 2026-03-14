@@ -44,15 +44,16 @@ if sys.platform == "win32":
 TOKEN  = os.getenv("DISCORD_TOKEN")
 PREFIX = "!"
 
-# Options yt-dlp : extraction audio uniquement, meilleure qualité
+# Options yt-dlp : extraction audio uniquement, plus de compatibilité
 YTDL_OPTIONS = {
     "format":            "bestaudio/best",
     "noplaylist":        True,
     "quiet":             True,
     "no_warnings":       True,
     "default_search":    "auto",
-    "source_address":    "0.0.0.0",
     "nocheckcertificate": True,
+    "ignoreerrors":      True,
+    "logtostderr":       False,
 }
 
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
@@ -389,9 +390,11 @@ async def on_ready():
     if not discord.opus.is_loaded():
         log.warn("🔊 Opus n'est pas chargé nativement, tentative de chargement...")
         try:
-            discord.opus.load_opus() # Cela peut échouer selon l'OS
+            # Sur Render (Debian), c'est souvent ce chemin par défaut ou automatique
+            discord.opus.load_opus("libopus.so.0")
+            log.info("🔊 Opus chargé avec succès !")
         except Exception as e:
-            log.error(f"❌ Impossible de charger Opus manuellement : {e}")
+            log.warn(f"⚠️ Opus n'a pas pu être chargé manuellement : {e}. Cela peut fonctionner malgré tout.")
 
     # Vérification de FFmpeg
     try:
