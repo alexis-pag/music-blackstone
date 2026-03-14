@@ -144,6 +144,7 @@ class GuildQueue:
         self.is_paused = False
         self.text_channel: discord.TextChannel | None = None
         self.timeout_task: asyncio.Task | None = None
+        self.connecting_lock = asyncio.Lock() # Verrou pour éviter les doubles connexions
 
     def add(self, track: Track):
         self.tracks.append(track)
@@ -382,17 +383,25 @@ async def add_to_queue(ctx: commands.Context, url: str):
     newly_connected = False
 
     # ── Rejoindre le salon vocal ─────────────────────
-    if not queue.voice or not queue.voice.is_connected():
-        try:
-            log.info(f"🎤 Connexion demandée au salon vocal...")
-            voice_channel = ctx.author.voice.channel
-            queue.voice = await voice_channel.connect(timeout=60.0, reconnect=True, self_deaf=True)
-            queue.text_channel = ctx.channel
-            newly_connected = True
-            log.info(f"✅ Connecté → {voice_channel.name}")
-        except Exception as e:
-            log.error(f"❌ Erreur connexion vocale : {e}")
-            return await ctx.reply(f"❌ Impossible de rejoindre le salon : {e}")
+    async with queue.connecting_lock:
+        if not queue.voice or not queue.voice.is_connected():
+            try:
+                # On nettoie toute ancienne connexion foireuse
+                if queue.voice:
+                    try: await queue.voice.disconnect(force=True)
+                    except: pass
+                    queue.voice = None
+
+                log.info(f"🎤 Connexion demandée au salon vocal...")
+                voice_channel = ctx.author.voice.channel
+                # On désactive self_deaf car il peut parfois poser problème sur Render avec l'erreur 4017
+                queue.voice = await voice_channel.connect(timeout=90.0, reconnect=True, self_deaf=False)
+                queue.text_channel = ctx.channel
+                newly_connected = True
+                log.info(f"✅ Connecté → {voice_channel.name}")
+            except Exception as e:
+                log.error(f"❌ Erreur connexion vocale : {e}")
+                return await ctx.reply(f"❌ Impossible de rejoindre le salon : {e}")
 
     # ── Extraire les métadonnées ───────────────────────────────────────────
     try:
@@ -528,14 +537,20 @@ async def on_voice_state_update(member: discord.Member, before, after):
     # ─── Cas du BOT lui-même ───
     if member.id == bot.user.id:
         if before.channel and not after.channel:
-            # On retire de _queues immédiatement pour éviter les race conditions (plusieurs events)
-            queue = _queues.pop(member.guild.id, None)
-            if queue:
-                log.info(f"🔌 Le bot a été déconnecté de {before.channel.name} ({member.guild.id})")
-                if queue.voice:
-                    try: await queue.voice.disconnect(force=True)
-                    except: pass
-                queue.clear()
+            # On attend un peu pour voir si c'est une déco réelle ou un changement/reco auto
+            await asyncio.sleep(2)
+            
+            # On revérifie si le bot est vraiment déconnecté (pas de voice_client actif)
+            vc = member.guild.voice_client
+            if vc is None or not vc.is_connected():
+                # On retire de _queues immédiatement
+                queue = _queues.pop(member.guild.id, None)
+                if queue:
+                    log.info(f"🔌 Le bot a été déconnecté de {before.channel.name} ({member.guild.id})")
+                    if queue.voice:
+                        try: await queue.voice.disconnect(force=True)
+                        except: pass
+                    queue.clear()
         return
 
     # ─── Cas où des HUMAINS quittent le salon ───
