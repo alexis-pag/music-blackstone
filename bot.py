@@ -60,12 +60,11 @@ YTDL_OPTIONS = {
     "extractor_args": {
         "youtubetab": {"skip": ["webpage"]},
         "youtube": {
-            "player_client": ["android", "ios", "web_creator"],
+            "player_client": ["android", "ios", "mweb", "tv"],
             "player_skip": ["webpage", "configs"],
-            "visitor_data": os.getenv("YOUTUBE_VISITOR_DATA", ""), # Optionnel pour bypass plus poussé
         }
     },
-    "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
     "http_chunk_size": 10485760,
     "youtube_include_dash_manifest": False,
     "youtube_include_hls_manifest": False,
@@ -233,6 +232,14 @@ async def extract_info(url: str) -> dict:
     # Gérer les cookies (notamment pour Render Secret Files)
     cookies_path = os.getenv("COOKIES_PATH")
     
+    # Injecter visitor_data s'il est présent
+    visitor_data = os.getenv("YOUTUBE_VISITOR_DATA")
+    if visitor_data:
+        log.info("📡 Injection de YOUTUBE_VISITOR_DATA dans l'extracteur")
+        if "youtube" not in opts["extractor_args"]:
+            opts["extractor_args"]["youtube"] = {}
+        opts["extractor_args"]["youtube"]["visitor_data"] = [visitor_data]
+    
     # Si COOKIES_PATH n'est pas défini, on cherche uniquement dans l'emplacement standard des secrets sur Render
     if not cookies_path:
         p = "/etc/secrets/cookies.txt"
@@ -275,9 +282,11 @@ async def extract_info(url: str) -> dict:
                 raise Exception("YouTube n'a renvoyé aucune information.")
 
             if "entries" in data:
+                if not data["entries"]:
+                    raise Exception("Aucune vidéo trouvée ou playlist vide.")
                 data = data["entries"][0]
                 if not data:
-                    raise Exception("Playlist vide ou inaccessible.")
+                    raise Exception("Données de vidéo invalides.")
 
             return data
     except Exception as e:
