@@ -44,7 +44,7 @@ if sys.platform == "win32":
 TOKEN  = os.getenv("DISCORD_TOKEN")
 PREFIX = "!"
 
-# Options yt-dlp : configuration maximale pour le bypass
+# Options yt-dlp : configuration ultra-compatible pour bypass Render
 YTDL_OPTIONS = {
     "format":            "bestaudio/best",
     "noplaylist":        True,
@@ -53,14 +53,12 @@ YTDL_OPTIONS = {
     "default_search":    "auto",
     "nocheckcertificate": True,
     "ignoreerrors":      False,
-    "logtostderr":       False,
+    "cachedir":          False,
     "extractor_args": {
         "youtube": {
-            "player_client": ["ios", "android", "web"],
-            "skip": ["dash", "hls"],
+            "player_client": ["ios"], # iOS est souvent le plus stable pour le bypass
         }
-    },
-    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
 }
 
 # Options FFmpeg pour le streaming (reconnect en cas de coupure réseau)
